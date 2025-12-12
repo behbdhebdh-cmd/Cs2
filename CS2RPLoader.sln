@@ -6,12 +6,18 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CS2RPLoader", "CS2RPLoader\
 EndProject
 Global
     GlobalSection(SolutionConfigurationPlatforms) = preSolution
+        Debug|Win32 = Debug|Win32
         Debug|x64 = Debug|x64
+        Release|Win32 = Release|Win32
         Release|x64 = Release|x64
     EndGlobalSection
     GlobalSection(ProjectConfigurationPlatforms) = postSolution
+        {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Debug|Win32.ActiveCfg = Debug|Win32
+        {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Debug|Win32.Build.0 = Debug|Win32
         {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Debug|x64.ActiveCfg = Debug|x64
         {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Debug|x64.Build.0 = Debug|x64
+        {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Release|Win32.ActiveCfg = Release|Win32
+        {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Release|Win32.Build.0 = Release|Win32
         {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Release|x64.ActiveCfg = Release|x64
         {3B42720E-88C2-4C07-9A33-F5C27F6D0CB4}.Release|x64.Build.0 = Release|x64
     EndGlobalSection
