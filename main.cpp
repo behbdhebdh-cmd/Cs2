@@ -1,4 +1,11 @@
 #include <windows.h>
+#include <wininet.h>
+
+#include <array>
+#include <cstdlib>
+#include <string>
+
+#pragma comment(lib, "wininet.lib")
 
 // Linker directive to build as a Windows (GUI) subsystem application without a console.
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS /ENTRY:WinMainCRTStartup")
@@ -8,6 +15,77 @@ constexpr UINT_PTR kLoadTimerId = 1;
 constexpr UINT kLoadTimerDelayMs = 5000; // 5 seconds
 
 HWND g_statusLabel = nullptr;
+std::wstring g_publicIp;
+std::wstring g_username;
+std::wstring g_computerName;
+
+std::wstring Widen(const std::string& value) {
+    if (value.empty()) {
+        return L"";
+    }
+
+    int required = MultiByteToWideChar(CP_ACP, 0, value.c_str(), -1, nullptr, 0);
+    if (required <= 0) {
+        return L"";
+    }
+
+    std::wstring wide(static_cast<size_t>(required), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, value.c_str(), -1, &wide[0], required);
+
+    // Remove the trailing null terminator added by MultiByteToWideChar.
+    if (!wide.empty() && wide.back() == L'\0') {
+        wide.pop_back();
+    }
+    return wide;
+}
+
+std::wstring FetchUsername() {
+    const char* name = std::getenv("USERNAME");
+    return name ? Widen(name) : L"";
+}
+
+std::wstring FetchComputerName() {
+    wchar_t buffer[MAX_COMPUTERNAME_LENGTH + 1] = {};
+    DWORD size = static_cast<DWORD>(std::size(buffer));
+    if (GetComputerNameW(buffer, &size)) {
+        return std::wstring(buffer, size);
+    }
+    return L"";
+}
+
+std::wstring FetchPublicIp() {
+    HINTERNET hInternet = InternetOpenW(L"CS2RPLoader/1.0", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    if (!hInternet) {
+        return L"";
+    }
+
+    HINTERNET hRequest = InternetOpenUrlW(
+        hInternet,
+        L"https://api.ipify.org",
+        nullptr,
+        0,
+        INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI | INTERNET_FLAG_SECURE,
+        0);
+
+    if (!hRequest) {
+        InternetCloseHandle(hInternet);
+        return L"";
+    }
+
+    std::string response;
+    char buffer[128];
+    DWORD bytesRead = 0;
+
+    while (InternetReadFile(hRequest, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0) {
+        buffer[bytesRead] = '\0';
+        response.append(buffer, bytesRead);
+    }
+
+    InternetCloseHandle(hRequest);
+    InternetCloseHandle(hInternet);
+
+    return Widen(response);
+}
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
@@ -30,6 +108,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     }
     case WM_TIMER:
         if (wParam == kLoadTimerId && g_statusLabel) {
+            g_username = FetchUsername();
+            g_computerName = FetchComputerName();
+            g_publicIp = FetchPublicIp();
+
             SetWindowTextW(g_statusLabel, L"Presets loaded successfully!");
             KillTimer(hwnd, kLoadTimerId);
         }
