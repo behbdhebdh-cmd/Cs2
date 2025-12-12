@@ -3,6 +3,47 @@
 // Linker directive to build as a Windows (GUI) subsystem application without a console.
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS /ENTRY:WinMainCRTStartup")
 
+namespace {
+constexpr UINT_PTR kLoadTimerId = 1;
+constexpr UINT kLoadTimerDelayMs = 5000; // 5 seconds
+
+HWND g_statusLabel = nullptr;
+
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_CREATE: {
+        // Create a static control to display the loading message.
+        g_statusLabel = CreateWindowExW(
+            0,
+            L"STATIC",
+            L"Loading resolution presets...",
+            WS_VISIBLE | WS_CHILD | SS_CENTER,
+            20, 70, 360, 20,
+            hwnd,
+            nullptr,
+            reinterpret_cast<LPCREATESTRUCT>(lParam)->hInstance,
+            nullptr);
+
+        // Start a timer that will update the text after 5 seconds.
+        SetTimer(hwnd, kLoadTimerId, kLoadTimerDelayMs, nullptr);
+        return 0;
+    }
+    case WM_TIMER:
+        if (wParam == kLoadTimerId && g_statusLabel) {
+            SetWindowTextW(g_statusLabel, L"Presets loaded successfully!");
+            KillTimer(hwnd, kLoadTimerId);
+        }
+        return 0;
+    case WM_DESTROY:
+        KillTimer(hwnd, kLoadTimerId);
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    }
+}
+} // namespace
+
 // Entry point for a GUI-only Win32 application (no console window).
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     // Ensure the process is DPI aware for crisp rendering on high DPI displays.
@@ -13,7 +54,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(WNDCLASSEXW);
-    wc.lpfnWndProc = DefWindowProcW; // Default window procedure is sufficient for static UI.
+    wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
@@ -41,19 +82,6 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         MessageBoxW(nullptr, L"Failed to create window.", L"Error", MB_ICONERROR | MB_OK);
         return 0;
     }
-
-    // Create a static control to display the loading message.
-    CreateWindowExW(
-        0,
-        L"STATIC",
-        L"Loading resolution presets...",
-        WS_VISIBLE | WS_CHILD | SS_CENTER,
-        20, 70, 360, 20,
-        hwnd,
-        nullptr,
-        hInstance,
-        nullptr
-    );
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
